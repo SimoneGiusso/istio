@@ -1,0 +1,19 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: customers
+spec:
+  hosts:
+    - "customers.default.svc.cluster.local"
+  http:
+    - route:
+        - destination:
+            host: customers.default.svc.cluster.local
+            port:
+              number: 80
+            subset: v1
+      fault:
+        delay: # Inject a delay of 5 seconds for 50% of the requests
+          percentage:
+            value: 50
+          fixedDelay: 5s

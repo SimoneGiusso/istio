@@ -1,0 +1,15 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: hello-world
+spec:
+  hosts:
+    - "*" # Apply this rule to all hosts
+  gateways:
+    - gateway # Attach the virtual service to the gateway (ingress-gateway.yaml/metadata.name)
+  http:
+    - route:
+        - destination:
+            host: hello-world.default.svc.cluster.local # The FQDN (name + namespace + svc.cluster.local)
+            port:
+              number: 80
