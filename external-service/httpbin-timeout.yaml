@@ -1,0 +1,17 @@
+# Apply a 3-second timeout to all calls to httpbin.org via the mesh.
+# Without the ServiceEntry above this VirtualService has no effect.
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: httpbin-external
+spec:
+  hosts:
+    - httpbin.org  # must match the host in the ServiceEntry exactly
+  http:
+    - route:
+        - destination:
+            host: httpbin.org
+            port:
+              number: 80
+      # KEY: timeout only applies after ServiceEntry registers httpbin.org in the mesh.
+      timeout: 3s

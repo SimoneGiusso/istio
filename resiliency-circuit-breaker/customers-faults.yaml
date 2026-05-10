@@ -1,0 +1,19 @@
+# Inject 100% 503 faults to trigger outlier detection and trip the circuit breaker
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: customers
+spec:
+  hosts:
+    - customers.default.svc.cluster.local
+  http:
+    - route:
+        - destination:
+            host: customers.default.svc.cluster.local
+            port:
+              number: 80
+      fault:
+        abort:
+          percentage:
+            value: 100
+          httpStatus: 503

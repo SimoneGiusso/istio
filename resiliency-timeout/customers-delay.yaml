@@ -1,0 +1,20 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: customers
+spec:
+  hosts:
+    - customers.default.svc.cluster.local
+  http:
+    - route:
+        - destination:
+            host: customers.default.svc.cluster.local
+            port:
+              number: 80
+      # KEY: fault.delay holds the request for 5s in the customers sidecar.
+      # web-frontend's 2s timeout fires first, returning 504.
+      fault:
+        delay:
+          percentage:
+            value: 100
+          fixedDelay: 5s

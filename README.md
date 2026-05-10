@@ -23,8 +23,7 @@ Run cloud provider kind for LoadBalancer cloud-like feature `sudo /opt/homebrew/
 2. Export path:
 
     ```sh
-    cd istio-1.29.0
-    export PATH=$PWD/bin:$PATH # Only valid in this terminal session
+    export PATH=$PWD/istio-1.29.0/bin:$PATH # Only valid in this terminal session
     istioctl version
     ```
 3. Install istio on cluster
@@ -276,67 +275,82 @@ These can be specified in the Virtual Service
 
 #### Timeout
 
-```yaml
-- route:
-  - destination:
-      host: customers.default.svc.cluster.local
-      subset: v1
-  timeout: 10s
+A `timeout` on a VirtualService route makes Envoy return `504 Gateway Timeout` if the upstream does not respond in time.
+
+The demo injects a 5-second delay into 100% of calls to `customers`, while the VirtualService enforces a 2-second timeout — every request times out.
+
+```sh
+kubectl apply -f resiliency-timeout/gateway.yaml
+kubectl apply -f resiliency-timeout/web-frontend.yaml
+kubectl apply -f resiliency-timeout/customers.yaml  # normal, no delay yet
+
+export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
+curl http://$GATEWAY_IP/  # 200 OK
+
+kubectl apply -f resiliency-timeout/customers-delay.yaml  # 5s delay + 2s timeout
+curl http://$GATEWAY_IP/  # 504 after ~2s
+```
+
+```sh
+kubectl delete -f resiliency-timeout/ --ignore-not-found
 ```
 
 #### Retries
 
-Where if a pod fails, the request will be retried to another pod:
+> **Note**: Fault injection aborts bypass retry logic. This demo uses a real "bad" pod (nothing listening on the expected port) to produce genuine connection-level 503s that ARE retried.
 
-```yaml
-- route:
-  - destination:
-      host: customers.default.svc.cluster.local
-      subset: v1
-  retries:
-    attempts: 10
-    perTryTimeout: 2s
-    retryOn: connect-failure,reset
+The demo deploys two pods: `customers-v1` (healthy) and `customers-v2-bad` (no app listening on port 3000). Without retries ~50% of calls fail; with retries Envoy retries until it hits the healthy pod.
+
+```sh
+kubectl apply -f resiliency-retries/customers-with-faults.yaml  # v1 healthy + v2 bad, no retries
+kubectl apply -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl rollout status deployment/customers-v1 deployment/customers-v2-bad deployment/sleep --timeout=60s # Wait for the above pods to be ready
+
+SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
+for i in $(seq 1 10); do kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://customers.default.svc.cluster.local; done  # ~50% are 503
+
+kubectl apply -f resiliency-retries/customers-with-retries.yaml  # adds retries: attempts 3, retryOn: 5xx,connect-failure
+for i in $(seq 1 10); do kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://customers.default.svc.cluster.local; done  # all 200 (retries route to different pod; if first hits bad pod, retry hits healthy v1)
 ```
+
+```sh
+kubectl delete -f resiliency-retries/customers-with-faults.yaml
+kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl delete vs customers 2>/dev/null; true
+```
+
 
 #### Circuit breaking with health checks
 
-Envoy perform health checks, not directly calling the service but using measures like:
+A `DestinationRule` with `outlierDetection` ejects unhealthy hosts from the load balancing pool after consecutive errors. The ejected endpoint is periodically retried after `baseEjectionTime` to check if it has recovered.
 
-- consecutive failures
-- temporal success rate
-- latency
-- ...
+The demo deploys `customers-v1` (healthy) and `customers-v2-bad` (busybox, no listener on port 3000). Without the DestinationRule ~50% of calls hit the bad pod and fail. With `outlierDetection.consecutive5xxErrors: 1` the bad pod is ejected after its first failure for 30 seconds; after 30s Envoy retries it, and if it still fails, it gets re-ejected for another 30 seconds.
 
-If they are not healthy, they are removed from the healthy load balacing pool:
+```sh
+kubectl apply -f resiliency-circuit-breaker/customers.yaml  # v1 healthy + v2 bad
+kubectl apply -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl rollout status deployment/customers-v1 deployment/customers-v2-bad deployment/sleep --timeout=60s
 
-```yaml
-apiVersion: networking.istio.io/v1beta1
-kind: DestinationRule
-metadata:
-  name: customers
-spec:
-  host: customers
-  trafficPolicy:
-    connectionPool: # Trigger circuit break if nOfTCPConnection > 1 or nOfHttpConnect > 1 or > 1 request per conn
-      tcp:
-        maxConnections: 1
-      http:
-        http1MaxPendingRequests: 1
-        maxRequestsPerConnection: 1
-      # If one of the above event happen return 503
-    outlierDetection:
-      consecutive5xxErrors: 1
-      baseEjectionTime: 3m # This is multiplied by the number the pod has been ejected in a row
-      interval: 1s # Check every... if healthy decrement multiplier above 
-      maxEjectionPercent: 100 # max percentage of pod that can be ejected from the pool
+SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
+for i in $(seq 1 10); do kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://customers.default.svc.cluster.local; done # ~50% 503
+
+kubectl apply -f resiliency-circuit-breaker/customers-circuit-breaker.yaml  # DestinationRule: eject bad pod after 1 consecutive error
+
+for i in $(seq 1 10); do kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://customers.default.svc.cluster.local; done # bad pod ejected after first hit, then all 200
+```
+
+```sh
+kubectl delete -f resiliency-circuit-breaker/customers.yaml
+kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl delete dr customers 2>/dev/null; true
+kubectl delete vs customers 2>/dev/null; true
 ```
 
 #### Fault injection
 
 It's possible to simulate a slow network or abort the Http request. Fault injections don't trigger retry policies!
 
-![alt text](image.png)
+![alt text](fault-injection.png)
 
 ```sh
 kubectl apply -f delays-and-failure-injection/gateway.yaml
@@ -360,34 +374,221 @@ kubectl delete gateway gateway
 
 #### Bring external service into the mesh
 
-It's possible to define timeouts and retries to external services:
+A `ServiceEntry` registers an external host in Istio's registry so traffic policies (timeout, retry) apply to it. Combined with `meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY`, only explicitly registered external services are reachable.
 
-apiVersion: networking.istio.io/v1beta1
-kind: ServiceEntry
-metadata:
-  name: googleapis-svc-entry
-spec:
-  hosts:
-  - www.googleapis.com
-  location: MESH_EXTERNAL let istio know about this external service (it will put it in its registry)
-  resolution: DNS
-  ports:
-  - number: 443
-    name: https
-    protocol: TLS
+**Part 1 — apply traffic policies to an external service:**
 
-And secure external calls by allowing the services inside the mesh to call just listed external services:
+A `ServiceEntry` for `httpbin.org` plus a `VirtualService` with a 3-second timeout. `httpbin.org/delay/10` would normally take 10s — the timeout cuts it short.
 
 ```sh
-istioctl install --set profile=demo \
-    --set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY
-
 kubectl apply -f istio-1.29.0/samples/sleep/sleep.yaml
 SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
 
-kubectl exec $SLEEP_POD -it -- curl -v https://github.com # It will fail
-kubectl apply -f limit-external-calls/github-external.yml
+# Works without ServiceEntry (default ALLOW_ANY policy lets all traffic out)
+kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://httpbin.org/get
 
+kubectl apply -f external-service/httpbin-entry.yaml   # register httpbin.org in the mesh
+kubectl apply -f external-service/httpbin-timeout.yaml # 3s timeout on all calls to httpbin.org
+
+# This endpoint delays 10s — Envoy cuts it off after 3s with 504
+kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://httpbin.org/delay/10
+```
+
+**Part 2 — block all unlisted external services (REGISTRY_ONLY):**
+
+```sh
+# Clean up Part 1 resources before switching mode
+kubectl delete serviceentry httpbin-external 2>/dev/null; true
+kubectl delete vs httpbin-external 2>/dev/null; true
+
+istioctl install --set profile=demo --set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY -y
+
+# All external calls now blocked
+kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://httpbin.org/get  # 502
+
+# Allow only httpbin.org
+kubectl apply -f external-service/httpbin-entry.yaml
+kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://httpbin.org/get  # 200
+```
+
+```sh
+# Restore default outbound policy
+istioctl install --set profile=demo --set meshConfig.outboundTrafficPolicy.mode=ALLOW_ANY -y
 kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
-kubectl delete serviceentry github-external
-```    
+kubectl delete serviceentry httpbin-external 2>/dev/null; true
+kubectl delete vs httpbin-external 2>/dev/null; true
+```
+
+## Security
+
+Some definitions:
+
+**Access Control**: can a *principal* perform an *action* on this *object*?
+**Authentication**: validate that credentials are valid and authentic. I k8s the service account is the identity
+**mTLS**: both client and service provide certificates to verify identity.
+
+### mTLS
+
+![alt text](mTLS.png)
+
+*PeerAuthentication* (accepted traffic) supports:
+
+| Mode | Description |
+|---|---|
+| UNSET | Setting is inherited from the parent (mesh or namespace). If not set, the effective behavior defaults to PERMISSIVE. |
+| DISABLE | mTLS is disabled; connections are plaintext. |
+| PERMISSIVE (default) | The workload accepts both plaintext and mTLS connections. Useful for gradual rollout or mixed clients. |
+| STRICT | Connections must use mTLS; both client and server must present valid certificates. |
+
+*DestinationRule* (send traffic) supports:
+
+| TLS Mode | Description |
+|---|---|
+| DISABLE | Does not set up a TLS connection (plaintext). |
+| SIMPLE | Standard TLS where the client verifies the server certificate (server-side TLS). |
+| MUTUAL | mTLS using user-provided key/certificate for both client and server. |
+| ISTIO_MUTUAL (default) | Istio-managed mTLS using automatic Istio-issued certificates (recommended for mesh-wide mTLS). |
+
+Therefore if the destination rule is not specificed, by default all traffic inside the mesh is encrypted.
+
+For inbound connections outside the mesh there is the `tls` field in the `Gateway` resource. Common `tls.mode` values:
+
+| TLS Mode | Description |
+|---|---|
+| PASSTHROUGH | Do not terminate TLS at the gateway; route matching is performed using SNI and the connection is forwarded to the destination unchanged. |
+| SIMPLE | Terminate TLS at the gateway with a standard TLS connection (server-side TLS). |
+| MUTUAL | Perform mTLS between the gateway and the destination using provided key/certificate (requires `caCertificates` or `credentialName`). |
+| AUTO_PASSTHROUGH | Like `PASSTHROUGH` but the SNI contains destination details (service, subset, port), so an associated `VirtualService` is not required to map SNI to a service. |
+| ISTIO_MUTUAL | Use Istio-managed certificates for mTLS on the gateway (Istio issues and rotates the certificates). |
+
+For outbound connection *DestinationRule* is applied.
+
+```sh
+kubectl apply -f mTLS/gateway.yaml
+
+kubectl label namespace default istio-injection- # Disable automatic injection to simulate a service outside the mesh
+kubectl apply -f mTLS/web-frontend.yaml
+
+kubectl label namespace default istio-injection=enabled
+kubectl get pods # customers should have two containers while the frontend just one
+export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
+curl http://$GATEWAY_IP/ # it works and won't be encrypted since the frontend send plain text
+
+kubectl apply -f mTLS/vs-customers-gateway.yaml # Expose customer
+curl -H "Host: customers.default.svc.cluster.local" http://$GATEWAY_IP # This will be encrypted because it goes from ingress to customer
+
+kubectl apply -f mTLS/strict-mtls.yaml # From this point on only calls directly to customer will work
+```
+
+```sh
+# Cleanup
+
+kubectl delete deploy web-frontend customers-v1
+kubectl delete svc customers web-frontend
+kubectl delete vs customers web-frontend
+kubectl delete gateway gateway
+```
+
+### Authentication & Authorization
+
+The *RequestAuthentication* resource is used for end-user authentication. The authentication is done per request and verifies the credentials attached to the request in JSON Web Tokens (JWTs).
+
+#### Authentication
+
+```sh
+# Deploy httpbin and curl WITH Envoy sidecars (2 containers each: app + istio-proxy)
+kubectl apply -f <(istioctl kube-inject -f istio-1.29.0/samples/httpbin/httpbin.yaml) -n foo 
+kubectl apply -f <(istioctl kube-inject -f istio-1.29.0/samples/curl/curl.yaml) -n foo
+
+#Verify the can communicate
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl http://httpbin.foo:8000/ip -sS -o /dev/null -w "%{http_code}\n"
+
+
+kubectl apply -f authentication/jwt-auth-httpbin.yaml
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer invalidToken" -w "%{http_code}\n" # 401
+
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -w "%{http_code}\n"
+# 200 JWT are only validated, not required
+
+kubectl apply -f authentication/jwt-policy.yaml
+
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -w "%{http_code}\n"
+# 403
+
+TOKEN=$(curl https://raw.githubusercontent.com/istio/istio/release-1.29/security/tools/jwt/samples/demo.jwt -s) && echo "$TOKEN" | cut -d '.' -f2 - | base64 --decode
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n" # With a valid token it successes
+
+
+kubectl apply -f authentication/jwt-policy-with-claim.yaml
+
+
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n" # Token is not valid anymore 403
+
+TOKEN_GROUP=$(curl https://raw.githubusercontent.com/istio/istio/release-1.29/security/tools/jwt/samples/groups-scope.jwt -s) && echo "$TOKEN_GROUP" | cut -d '.' -f2 - | base64 --decode
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN_GROUP" -w "%{http_code}\n" # With the group claim is valid
+```
+
+```sh
+# Clean up
+kubectl delete namespace foo
+```
+
+#### Authorization
+
+Once authenticated a principal can be subjected to authorized only to perform a specific set of actions: 
+
+- ALLOW
+- DENY
+- CUSTOM: let the decision to an exteranl authorization system
+- AUDIT: only log request if the criterias matches
+
+If there are more policies the get evaluated in the following order: CUSTOM, DENY & ALLOW. A good practice is having a policy to deny all request and create individual allows.
+
+```sh
+kubectl apply -f authorization/gateway.yaml
+kubectl apply -f authorization/web-frontend.yaml
+kubectl apply -f authorization/customers-v1.yaml
+
+export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
+
+
+curl http://$GATEWAY_IP/ # Works
+
+kubectl apply -f authorization/deny-all.yaml
+curl http://$GATEWAY_IP/ # Fail
+
+kubectl apply -f authorization/allow-ingress-frontend.yaml 
+curl http://$GATEWAY_IP/ # Fail but this time the failure is not coming from the ingress -> frontend connection but frontend -> customer
+
+# This will be defined because it doesn't go through ingress. Deny all is still applied...
+kubectl run curl --image=curlimages/curl --restart=Never --rm -it -- curl http://web-frontend  # RBAC: access denied
+
+kubectl apply -f authorization/allow-web-frontend-customers.yaml
+curl http://$GATEWAY_IP/ # Works
+```
+
+# Clean up
+```sh
+kubectl delete sa customers-v1 web-frontend
+kubectl delete deploy web-frontend customers-v1
+kubectl delete svc customers web-frontend
+kubectl delete vs customers web-frontend
+kubectl delete gateway gateway
+kubectl delete authorizationpolicy allow-ingress-frontend allow-web-frontend-customers deny-all
+kubectl delete pod curl
+```
+
+It is possible to be more granular at endpoint level
+
+```yaml
+to:
+  - operation:
+      host: ["*.hello.com"]
+      methods: ["DELETE"]
+      notPaths: ["/admin*"]
+when:
+   - key: request.auth.claims[iss]
+     values: ["ht‌tps://accounts.google.com"]
+   - key: request.headers[User-Agent]
+     notValues: ["curl/*"]
+```   

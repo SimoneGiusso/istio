@@ -1,0 +1,28 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: customers
+spec:
+  host: customers.default.svc.cluster.local
+  trafficPolicy:
+    # connectionPool: limits per-endpoint concurrency to trigger overflow rejection (503).
+    # With maxConnections=1 and http1MaxPendingRequests=1, the bad pod quickly overflows,
+    # triggering 503 responses that flag it for ejection.
+    connectionPool:
+      tcp:
+        maxConnections: 1 # max concurrent connections to this endpoint
+      http:
+        http1MaxPendingRequests: 1 # max requests waiting for connection (rejects if exceeded)
+        maxRequestsPerConnection: 1 # force new connection for each request (disables keep-alive)
+
+    # outlierDetection: the circuit breaker. Monitors endpoint health and ejects bad ones.
+    # Ejected endpoints are removed from the pool temporarily, then periodically retried.
+    outlierDetection:
+      consecutive5xxErrors: 1 # eject endpoint after 1 consecutive error (low tolerance)
+      interval:
+        10s # scan frequency: every 10s, check if any ejected endpoint has been out for ≥baseEjectionTime
+        # if yes, move it back to pool and test it; if it fails again, re-eject for another baseEjectionTime
+      baseEjectionTime:
+        30s # how long to keep endpoint ejected before eligible for retry
+        # actual retry happens at next interval scan (up to baseEjectionTime + interval)
+      maxEjectionPercent: 100 # allow up to 100% of endpoints to be ejected (aggressive for demo)

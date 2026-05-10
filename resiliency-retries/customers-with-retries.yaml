@@ -1,0 +1,43 @@
+# Same routing but with retries — Envoy retries on 5xx/connect-failure.
+# With 3 attempts and 50% bad pods, P(all retries hit bad pod) = (0.5)^3 = 12.5% → mostly 200
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: customers
+spec:
+  hosts:
+    - customers.default.svc.cluster.local
+  http:
+    - route:
+        - destination:
+            host: customers.default.svc.cluster.local
+            port:
+              number: 80
+      # KEY: retries on connect-failure (TCP rejection from bad pod) and 5xx.
+      # 3 attempts × 50% bad pods → P(all fail) ≈ 12.5%, so most succeed.
+      #
+      # EXAMPLE FLOW:
+      # Request arrives at sleep → routed to customers (50% v1 healthy, 50% v2-bad).
+      # 
+      # Attempt 1: hits v2-bad pod
+      #   → TCP connection refused (no listener on port 3000)
+      #   → retryOn: connect-failure triggers retry
+      #
+      # Attempt 2: hits v1 healthy pod
+      #   → returns 200 OK
+      #   → success, request completes
+      #
+      # If unlucky and all 3 attempts hit v2-bad:
+      #   → all fail with connect-failure → final 503 to client
+      #   → happens only 12.5% of the time with 50% bad pods
+      #
+      retries:
+        # attempts: total number of tries (1 initial + 2 retries = 3 total)
+        attempts: 3
+        # perTryTimeout: max time to wait for a single attempt before counting as failed.
+        # If an attempt takes longer than this, it's treated as failed and retried.
+        perTryTimeout: 2s
+        # retryOn: which errors trigger an automatic retry.
+        # - 5xx: HTTP 5xx errors (e.g., 500, 503)
+        # - connect-failure: TCP connection refused (pod has no listener on the port)
+        retryOn: 5xx,connect-failure

@@ -1,0 +1,16 @@
+# Register httpbin.org as a mesh-external service.
+# This allows Istio to apply traffic policies (timeout, retry) to external calls.
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: httpbin-external
+spec:
+  hosts:
+    - httpbin.org
+  # KEY: MESH_EXTERNAL + REGISTRY_ONLY mode = block external traffic unless explicitly allowed.
+  location: MESH_EXTERNAL
+  resolution: DNS
+  ports:
+    - number: 80
+      name: http
+      protocol: HTTP

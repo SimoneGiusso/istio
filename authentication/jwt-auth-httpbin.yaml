@@ -1,0 +1,20 @@
+# RequestAuthentication: validates end-user credentials attached to requests (e.g., JWT tokens in HTTP headers).
+# This resource does NOT enforce access — it only validates and extracts claims from tokens.
+# To enforce who can access what, pair this with AuthorizationPolicy (which uses the validated principal).
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: "jwt-example"
+  namespace: foo                    # Policy applies to workloads in the "foo" namespace
+spec:
+  selector:
+    matchLabels:
+      app: httpbin                  # Applies only to pods labeled app: httpbin
+
+  jwtRules:                         # List of JWT validation rules; a request matches if ANY rule succeeds
+  - issuer: "testing@secure.istio.io"       # Expected JWT issuer claim (iss); request JWT must match this
+    jwksUri: "https://raw.githubusercontent.com/istio/istio/release-1.29/security/tools/jwt/samples/jwks.json"
+                                   # Public key set URL (JWKS) used to verify JWT signature
+                                   # Istio fetches this URL to get the keys for token validation
+                                   # If the token signature does NOT match, the request is rejected with 401
+                                   # If validation succeeds, the token claims become available for AuthorizationPolicy rules
