@@ -516,11 +516,10 @@ kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata
 # 403
 
 TOKEN=$(curl https://raw.githubusercontent.com/istio/istio/release-1.29/security/tools/jwt/samples/demo.jwt -s) && echo "$TOKEN" | cut -d '.' -f2 - | base64 --decode
-kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n" # With a valid token it successes
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n" # With a valid token it successed
 
 
 kubectl apply -f authentication/jwt-policy-with-claim.yaml
-
 
 kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n" # Token is not valid anymore 403
 
@@ -567,8 +566,9 @@ kubectl apply -f authorization/allow-web-frontend-customers.yaml
 curl http://$GATEWAY_IP/ # Works
 ```
 
-# Clean up
 ```sh
+# Clean up
+
 kubectl delete sa customers-v1 web-frontend
 kubectl delete deploy web-frontend customers-v1
 kubectl delete svc customers web-frontend
@@ -592,3 +592,33 @@ when:
    - key: request.headers[User-Agent]
      notValues: ["curl/*"]
 ```   
+
+## Advance topics
+
+### Extend the mesh
+
+It's possible via the wasm plugin to add custom functionality to envoy proxies, e.g. it's possible to write a script that add headers to each request.
+
+### Improve mesh performances
+
+By default istio inform each service of each other. If there is a change the work to get the mesh up to date is bigger compare to the case where istio knows which service communicate to which ones. This is worthy for very large clusters though.
+
+```sh
+
+kubectl apply -f istio-1.29.0/samples/bookinfo/platform/kube/bookinfo.yaml
+istioctl proxy-config endpoints deploy/ratings-v1.default # shows the list of endpoints the sidecar is configured to but this service has not outbound connections
+
+kubectl apply -f advanced/limit-service-awarness-sidecars.yaml
+istioctl proxy-config endpoints deploy/ratings-v1.default # now it has not any reference to ratings service for example
+
+# Clean up
+kubectl delete -f istio-1.29.0/samples/bookinfo/platform/kube/bookinfo.yaml
+kubectl delete sidecar {details,productpage,ratings,reviews-v1,reviews-v2,reviews-v3}-sidecar
+```
+
+### Onboarding VM in istio cluster
+
+Istio makes its istio-proxy sidecar available as a Debian (.deb) or CentOS (.rpm) package and can simply be installed on a Linux VM and configured as a systemd service.
+
+![image](VM-mesh-extension.png)
+
