@@ -1,6 +1,38 @@
 # Istio Learning
 
-## Requirements
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Pre-setup](#pre-setup)
+- [Setup](#setup)
+  - [Uninstall istio](#uninstall-istio)
+  - [Enable automatic sidecar injection](#enable-automatic-sidecar-injection)
+- [Observability](#observability)
+  - [Tracing](#tracing)
+  - [Kiali](#kiali)
+- [Traffic Management](#traffic-management)
+  - [Ingress](#ingress)
+    - [How the YAML maps to the flow](#how-the-yaml-maps-to-the-flow)
+  - [Resources to manage traffic in Istio](#resources-to-manage-traffic-in-istio)
+    - [Weighted traffic](#weighted-traffic)
+    - [Header based traffic](#header-based-traffic)
+  - [Resiliency & Failure Injection: timeout, retry & circuit breaking](#resiliency--failure-injection-timeout-retry--circuit-breaking)
+    - [Timeout](#timeout)
+    - [Retries](#retries)
+    - [Circuit breaking with health checks](#circuit-breaking-with-health-checks)
+    - [Fault injection](#fault-injection)
+    - [Bring external service into the mesh](#bring-external-service-into-the-mesh)
+- [Security](#security)
+  - [mTLS](#mtls)
+  - [Authentication & Authorization](#authentication--authorization)
+    - [Authentication](#authentication)
+    - [Authorization](#authorization)
+- [Advance topics](#advance-topics)
+  - [Extend the mesh](#extend-the-mesh)
+  - [Improve mesh performances](#improve-mesh-performances)
+  - [Onboarding VM in istio cluster](#onboarding-vm-in-istio-cluster)
+
+## Requirements
 
 - Docker
 - kind > v0.31.0
