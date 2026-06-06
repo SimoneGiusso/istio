@@ -5,7 +5,7 @@ metadata:
   name: demo-installation
 spec:
   profile: demo # `istioctl profile list` shows the possible profiles. Each profiles have different config (e.g. some may also include an egress gateway)
-  meshConfig:
+  meshConfig: # Global mesh configuration (connection timeouts, headers to add or modify for HTTP requests/responses, envoy configuration, etc...) https://istio.io/latest/docs/reference/config/istio.mesh.v1alpha1/#MeshConfig
     enableTracing: true
     defaultConfig:
       tracing: {} # disable legacy MeshConfig tracing options

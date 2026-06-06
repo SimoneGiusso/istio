@@ -12,3 +12,12 @@ spec:
         protocol: HTTP
       hosts:
         - '*'
+    - port: 
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - '*'
+  tls:
+    mode: SIMPLE # SIMPLE: The gateway serves HTTPS traffic by presenting a certificate to the clients. The clients are not required to present a certificate to the gateway.
+    credentialName: istio-ingressgateway-certs # Present the certificate stored in this secret to the clients that connect to the gateway. The secret must be in the same namespace as the gateway. The secret should contain a key named tls.crt with the certificate and a key named tls.key with the private key.

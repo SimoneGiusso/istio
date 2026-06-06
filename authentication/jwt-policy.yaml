@@ -9,6 +9,8 @@ spec:
       app: httpbin
   action: ALLOW
   rules:
-  - from:
-    - source:
-       requestPrincipals: ["testing@secure.istio.io/testing@secure.istio.io"] # Istio constructs the requestPrincipal by combining the iss and sub of the JWT token with a / separator
+    - from:
+        - source:
+            requestPrincipals: [
+                "testing@secure.istio.io/testing@secure.istio.io",
+              ] # Istio constructs the requestPrincipal by combining the iss and sub of the JWT token with a / separator

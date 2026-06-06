@@ -62,15 +62,24 @@ Run cloud provider kind for LoadBalancer cloud-like feature `sudo /opt/homebrew/
 
      `istioctl install -f demo-profile.yaml` or `istioctl install --set profile=demo`
 
-    [IstioOperator resource](https://istio.io/latest/docs/reference/config/istio.operator.v1alpha1/) [demo-profile.yaml](/demo-profile.yaml) can be further customized for installation onto k8s.
+ All available profiles: `ls istio-1.29.0/manifests/profiles`:
+
+| PROFILE NAME | DESCRIPTION |
+|---|---|
+| ambient | Used for ambient mode deployment model. Includes the istiod and ztunnel components. |
+| default | Includes components (istiod and istio-ingressgateway) and default settings from the IstioOperator API. Recommended profile for production deployments and primary clusters (multi-mesh scenario). |
+| demo | Designed for showcasing Istio; includes istiod, istio-ingressgateway, and istio-egressgateway. Enables high levels of tracing and access logging. |
+| empty | Same as the default profile, but it does not include any components. Mostly used as a base profile to build custom configurations. |
+| minimal | Same as the default profile, without the istio-ingressgateway. |
+| openshift | Used for deploying on OpenShift. Similar to the default profile; enables the use of Istio CNI. |
+| preview | Includes the same components as the default profile (istiod and istio-ingressgateway) and enables experimental preview features. |
+| remote | Previously called "external"; used to configure a remote cluster managed by an external control plane. |
+
+  [IstioOperator resource](https://istio.io/latest/docs/reference/config/istio.operator.v1alpha1/) [demo-profile.yaml](/demo-profile.yaml) control all the aspects of istio installation and component configuration and can be further customized.
 
 4. Check installation:
 
     `kubectl get pods -n istio-system` 
-
-    `istiod` is a service for mutating webhook configuration (sidecar injection)
-
-Customization can be provided to each installed chart. To review the available settings that can be updated for istiod as example: `helm show values istio/istiod`
 
 ### Uninstall istio
 
@@ -527,36 +536,74 @@ The *RequestAuthentication* resource is used for end-user authentication. The au
 
 #### Authentication
 
+The *RequestAuthentication* resource validates JWT tokens on incoming requests. It does **not** enforce access by itself — a missing token is still allowed through (validation only applies when a token is present). Pair it with an *AuthorizationPolicy* to enforce who can access what.
+
 ```sh
 # Deploy httpbin and curl WITH Envoy sidecars (2 containers each: app + istio-proxy)
-kubectl apply -f <(istioctl kube-inject -f istio-1.29.0/samples/httpbin/httpbin.yaml) -n foo 
+kubectl create namespace foo
+kubectl label namespace foo istio-injection=enabled
+kubectl apply -f <(istioctl kube-inject -f istio-1.29.0/samples/httpbin/httpbin.yaml) -n foo
 kubectl apply -f <(istioctl kube-inject -f istio-1.29.0/samples/curl/curl.yaml) -n foo
+kubectl rollout status deployment/httpbin deployment/curl -n foo --timeout=90s
 
-#Verify the can communicate
+# Verify they can communicate before any policy
 kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl http://httpbin.foo:8000/ip -sS -o /dev/null -w "%{http_code}\n"
-
+# 200
 
 kubectl apply -f authentication/jwt-auth-httpbin.yaml
-kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer invalidToken" -w "%{http_code}\n" # 401
 
+# Invalid token → 401 (RequestAuthentication rejects it)
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer invalidToken" -w "%{http_code}\n"
+# 401
+
+# No token → 200 (RequestAuthentication only validates; no AuthorizationPolicy yet)
 kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -w "%{http_code}\n"
-# 200 JWT are only validated, not required
+# 200
 
+# Valid token → X-Jwt-Payload injected and original Authorization header preserved
+TOKEN=$(curl https://raw.githubusercontent.com/istio/istio/release-1.29/security/tools/jwt/samples/demo.jwt -s)
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -H "Authorization: Bearer $TOKEN"
+# "Authorization": ["Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IkRIRmJwb0lVcXJZOHQyenBBMnFYZkNtcjVWTzVaRXI0UnpIVV8tZW52dlEiLCJ0eXAiOiJKV1QifQ.eyJleHAiOjQ2ODU5ODk3MDAsImZvbyI6ImJhciIsImlhdCI6MTUzMjM4OTcwMCwiaXNzIjoidGVzdGluZ0BzZWN1cmUuaXN0aW8uaW8iLCJzdWIiOiJ0ZXN0aW5nQHNlY3VyZS5pc3Rpby5pbyJ9.CfNnxWP2tcnR9q0vxyxweaF3ovQYHYZl82hAUsn21bwQd9zP7c..."]
+#   ↑ forwardOriginalToken: true — the full original JWT (header.payload.signature, 3 dot-separated parts) is forwarded as-is
+#   Part 1 (header):    echo "eyJhbGciOiJSUzI1NiIs..." | base64 --decode → {"alg":"RS256","kid":"DHFbpoIUqrY8t2zpA2qXfCmr5VO5ZEr4RzHU_-envvQ","typ":"JWT"}
+#   Part 2 (payload):   echo "eyJleHAiOjQ2ODU5..." | base64 --decode    → {"exp":4685989700,"foo":"bar","iat":1532389700,"iss":"testing@secure.istio.io","sub":"testing@secure.istio.io"}
+#   Part 3 (signature): raw cryptographic bytes — not human-readable JSON
+#
+# "X-Jwt-Payload": ["eyJleHAiOjQ2ODU5ODk3MDAsImZvbyI6ImJhciIsImlhdCI6MTUzMjM4OTcwMCwiaXNzIjoidGVzdGluZ0BzZWN1cmUuaXN0aW8uaW8iLCJzdWIiOiJ0ZXN0aW5nQHNlY3VyZS5pc3Rpby5pbyJ9"]
+#   ↑ outputPayloadToHeader — only the payload/claims part (the middle segment of the JWT), base64url-encoded
+#   Unlike Authorization, this contains NO signature and NO JWT header — just the claims JSON
+# echo "eyJleHAiOjQ2ODU5ODk3MDAs..." | base64 --decode
+# → {"exp":4685989700,"foo":"bar","iat":1532389700,"iss":"testing@secure.istio.io","sub":"testing@secure.istio.io"}
+```
+
+`authentication/jwt-policy.yaml` — `AuthorizationPolicy` that requires a valid JWT with `requestPrincipal = testing@secure.istio.io/testing@secure.istio.io` (issuer + subject). Without a matching token the request is denied with `403`.
+
+```sh
 kubectl apply -f authentication/jwt-policy.yaml
 
+# No token → 403 (AuthorizationPolicy denies — no matching principal)
 kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -w "%{http_code}\n"
 # 403
 
-TOKEN=$(curl https://raw.githubusercontent.com/istio/istio/release-1.29/security/tools/jwt/samples/demo.jwt -s) && echo "$TOKEN" | cut -d '.' -f2 - | base64 --decode
-kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n" # With a valid token it successed
+TOKEN=$(curl https://raw.githubusercontent.com/istio/istio/release-1.29/security/tools/jwt/samples/demo.jwt -s) && echo "$TOKEN" | cut -d '.' -f2 | base64 --decode
+# → {"exp":4685989700,"foo":"bar","iat":1532389700,"iss":"testing@secure.istio.io","sub":"testing@secure.istio.io"}
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n"
+# 200 — principal matches
+```
 
+`authentication/jwt-policy-with-claim.yaml` — updates the `AuthorizationPolicy` (same name `require-jwt`) to also require a `groups: group1` claim. The demo.jwt token no longer satisfies this condition.
 
+```sh
 kubectl apply -f authentication/jwt-policy-with-claim.yaml
 
-kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n" # Token is not valid anymore 403
+# Valid token but no groups claim → 403
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n"
+# 403
 
-TOKEN_GROUP=$(curl https://raw.githubusercontent.com/istio/istio/release-1.29/security/tools/jwt/samples/groups-scope.jwt -s) && echo "$TOKEN_GROUP" | cut -d '.' -f2 - | base64 --decode
-kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN_GROUP" -w "%{http_code}\n" # With the group claim is valid
+TOKEN_GROUP=$(curl https://raw.githubusercontent.com/istio/istio/release-1.29/security/tools/jwt/samples/groups-scope.jwt -s) && echo "$TOKEN_GROUP" | cut -d '.' -f2 | base64 --decode
+# → {"exp":3537391104,"groups":["group1","group2"],"iat":1537391104,"iss":"testing@secure.istio.io","scope":["scope1","scope2"],"sub":"testing@secure.istio.io"}
+kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN_GROUP" -w "%{http_code}\n"
+# 200 — principal matches and groups claim is satisfied
 ```
 
 ```sh
