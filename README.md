@@ -16,6 +16,7 @@
   - [Resources to manage traffic in Istio](#resources-to-manage-traffic-in-istio)
     - [Weighted traffic](#weighted-traffic)
     - [Header based traffic](#header-based-traffic)
+    - [URI Rewrite](#uri-rewrite)
   - [Resiliency & Failure Injection: timeout, retry & circuit breaking](#resiliency--failure-injection-timeout-retry--circuit-breaking)
     - [Timeout](#timeout)
     - [Retries](#retries)
@@ -308,6 +309,47 @@ kubectl delete svc customers web-frontend
 kubectl delete vs customers web-frontend
 kubectl delete dr customers
 kubectl delete gateway gateway
+```
+
+#### URI Rewrite
+
+When matching on specific URIs, the request URI sometimes must be rewritten before forwarding to the destination. Istio supports URI rewrites using the **`rewrite`** field in a VirtualService.
+
+The demo deploys `customers-v1` (returns names only) and `customers-v2` (returns names + city). The v2 API was internally refactored so its root endpoint is `/`. External callers still use the versioned path `/api/customers`. Rather than updating every caller, the VirtualService matches on the `/api/customers` prefix, rewrites the URI to `/`, and routes the request to the v2 subset. Unmatched traffic falls through to v1.
+
+> **Response content reveals which version served the request:**
+> - v1 → `[{"name":"..."}]` — names only
+> - v2 → `[{"city":"...","name":"..."}]` — names + city
+
+```sh
+kubectl apply -f traffic-management/trafficrouting-rewrite/customers.yaml
+kubectl apply -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl rollout status deployment/customers-v1 deployment/customers-v2 deployment/sleep --timeout=60s
+
+SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
+
+# Without the VirtualService: requests are load-balanced across v1 and v2 at random
+kubectl exec $SLEEP_POD -c sleep -- curl -s http://customers.default.svc.cluster.local/api/customers
+# could be names-only (v1) or names+city (v2) — non-deterministic
+
+# Apply the VirtualService: /api/customers → rewrite to / → always v2; default → v1
+kubectl apply -f traffic-management/trafficrouting-rewrite/customers-vs-rewrite.yaml
+
+sleep 3  # allow Envoy config to propagate
+
+# /api/customers is rewritten to / before reaching v2 → always returns names+city
+kubectl exec $SLEEP_POD -c sleep -- curl -s http://customers.default.svc.cluster.local/api/customers
+# [{"city":"...","name":"..."},...]
+
+# Default route (no prefix match) always reaches v1 → names only
+kubectl exec $SLEEP_POD -c sleep -- curl -s http://customers.default.svc.cluster.local/
+# [{"name":"..."},...]
+```
+
+```sh
+kubectl delete -f traffic-management/trafficrouting-rewrite/customers.yaml
+kubectl delete -f traffic-management/trafficrouting-rewrite/customers-vs-rewrite.yaml
+kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
 ```
 
 ### Resiliency & Failure Injection: timeout, retry & circuit breaking

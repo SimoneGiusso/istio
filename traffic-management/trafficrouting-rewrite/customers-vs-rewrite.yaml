@@ -1,0 +1,29 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: customers
+spec:
+  hosts:
+    - customers.default.svc.cluster.local
+  http:
+    # Requests to /api/customers are rewritten to / before being forwarded to the v2 subset.
+    # This allows callers to keep using the versioned /api/customers path even though
+    # the v2 service internally only exposes / as its root endpoint.
+    - match:
+        - uri:
+            prefix: /api/customers
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: customers.default.svc.cluster.local
+            port:
+              number: 80
+            subset: v2
+    # Default route: all other traffic goes to v1 with no rewrite
+    - route:
+        - destination:
+            host: customers.default.svc.cluster.local
+            port:
+              number: 80
+            subset: v1
