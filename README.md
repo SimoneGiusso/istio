@@ -195,7 +195,7 @@ istioctl dashboard kiali
 Configure istio ingress:
 
 ```sh
-kubectl apply -f trafficmanagement/ingress-gateway.yaml
+kubectl apply -f traffic-management/trafficmanagement/ingress-gateway.yaml
 export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
 echo $GATEWAY_IP
 ```
@@ -203,13 +203,13 @@ echo $GATEWAY_IP
 Create a sample app with a service:
 
 ```sh
-kubectl apply -f trafficmanagement/hello-world.yaml
+kubectl apply -f traffic-management/trafficmanagement/hello-world.yaml
 ```
 
 Create a virtual service:
 
 ```sh
-kubectl apply -f trafficmanagement/virtual-service.yaml
+kubectl apply -f traffic-management/trafficmanagement/virtual-service.yaml
 kubectl get vs
 ```
 
@@ -258,25 +258,25 @@ Apart from Gateway, istio offers other resources to manage traffic:
 Route traffic between different service versions.
 
 ```sh
-kubectl apply -f trafficrouting-weightbased/ingress-gateway.yaml
+kubectl apply -f traffic-management/trafficrouting-weightbased/ingress-gateway.yaml
 
-kubectl apply -f trafficrouting-weightbased/web-frontend.yaml
+kubectl apply -f traffic-management/trafficrouting-weightbased/web-frontend.yaml
 
-kubectl apply -f trafficrouting-weightbased/customers-v1.yaml
+kubectl apply -f traffic-management/trafficrouting-weightbased/customers-v1.yaml
 
-kubectl apply -f trafficrouting-weightbased/web-frontend-vs.yaml
+kubectl apply -f traffic-management/trafficrouting-weightbased/web-frontend-vs.yaml
 ```
 
 Create a DestinationRule based on a label:
 
 ```sh
-kubectl apply -f trafficrouting-weightbased/customers-dr.yaml
+kubectl apply -f traffic-management/trafficrouting-weightbased/customers-dr.yaml
 ```
 
 ```sh
-kubectl apply -f trafficrouting-weightbased/customers-dr.yaml
-kubectl apply -f trafficrouting-weightbased/customers-vs.yaml
-kubectl apply -f trafficrouting-weightbased/customers-v2.yaml
+kubectl apply -f traffic-management/trafficrouting-weightbased/customers-dr.yaml
+kubectl apply -f traffic-management/trafficrouting-weightbased/customers-vs.yaml
+kubectl apply -f traffic-management/trafficrouting-weightbased/customers-v2.yaml
 export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
 ```
 
@@ -295,9 +295,9 @@ kubectl delete gw gateway
 #### Header based traffic
 
 ```sh
-kubectl apply -f requestpheaderbasedgateway.yaml
-kubectl apply -f trafficrouting-requestpheaderbased/web-frontend.yaml
-kubectl apply -f trafficrouting-requestpheaderbased/customers.yaml
+kubectl apply -f traffic-management/trafficrouting-requestheaderbased/ingress-gateway.yaml
+kubectl apply -f traffic-management/trafficrouting-requestheaderbased/web-frontend.yaml
+kubectl apply -f traffic-management/trafficrouting-requestheaderbased/customers.yaml
 ```
 
 Opening `GATEWAY_IP` on the browser you should only see the NAME column on the resulting page since all traffic is routed to `customers-v1` service. However `curl -H "user: debug" http://$GATEWAY_IP/ | grep -E 'CITY|NAME'` will hit the `customer-v2` service.
@@ -321,19 +321,19 @@ A `timeout` on a VirtualService route makes Envoy return `504 Gateway Timeout` i
 The demo injects a 5-second delay into 100% of calls to `customers`, while the VirtualService enforces a 2-second timeout — every request times out.
 
 ```sh
-kubectl apply -f resiliency-timeout/gateway.yaml
-kubectl apply -f resiliency-timeout/web-frontend.yaml
-kubectl apply -f resiliency-timeout/customers.yaml  # normal, no delay yet
+kubectl apply -f resiliency/resiliency-timeout/gateway.yaml
+kubectl apply -f resiliency/resiliency-timeout/web-frontend.yaml
+kubectl apply -f resiliency/resiliency-timeout/customers.yaml  # normal, no delay yet
 
 export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
 curl http://$GATEWAY_IP/  # 200 OK
 
-kubectl apply -f resiliency-timeout/customers-delay.yaml  # 5s delay + 2s timeout
+kubectl apply -f resiliency/resiliency-timeout/customers-delay.yaml  # 5s delay + 2s timeout
 curl http://$GATEWAY_IP/  # 504 after ~2s
 ```
 
 ```sh
-kubectl delete -f resiliency-timeout/ --ignore-not-found
+kubectl delete -f resiliency/resiliency-timeout/ --ignore-not-found
 ```
 
 #### Retries
@@ -343,19 +343,19 @@ kubectl delete -f resiliency-timeout/ --ignore-not-found
 The demo deploys two pods: `customers-v1` (healthy) and `customers-v2-bad` (no app listening on port 3000). Without retries ~50% of calls fail; with retries Envoy retries until it hits the healthy pod.
 
 ```sh
-kubectl apply -f resiliency-retries/customers-with-faults.yaml  # v1 healthy + v2 bad, no retries
+kubectl apply -f resiliency/resiliency-retries/customers-with-faults.yaml  # v1 healthy + v2 bad, no retries
 kubectl apply -f istio-1.29.0/samples/sleep/sleep.yaml
 kubectl rollout status deployment/customers-v1 deployment/customers-v2-bad deployment/sleep --timeout=60s # Wait for the above pods to be ready
 
 SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
 for i in $(seq 1 10); do kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://customers.default.svc.cluster.local; done  # ~50% are 503
 
-kubectl apply -f resiliency-retries/customers-with-retries.yaml  # adds retries: attempts 3, retryOn: 5xx,connect-failure
+kubectl apply -f resiliency/resiliency-retries/customers-with-retries.yaml  # adds retries: attempts 3, retryOn: 5xx,connect-failure
 for i in $(seq 1 10); do kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://customers.default.svc.cluster.local; done  # all 200 (retries route to different pod; if first hits bad pod, retry hits healthy v1)
 ```
 
 ```sh
-kubectl delete -f resiliency-retries/customers-with-faults.yaml
+kubectl delete -f resiliency/resiliency-retries/customers-with-faults.yaml
 kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
 kubectl delete vs customers 2>/dev/null; true
 ```
@@ -368,20 +368,20 @@ A `DestinationRule` with `outlierDetection` ejects unhealthy hosts from the load
 The demo deploys `customers-v1` (healthy) and `customers-v2-bad` (busybox, no listener on port 3000). Without the DestinationRule ~50% of calls hit the bad pod and fail. With `outlierDetection.consecutive5xxErrors: 1` the bad pod is ejected after its first failure for 30 seconds; after 30s Envoy retries it, and if it still fails, it gets re-ejected for another 30 seconds.
 
 ```sh
-kubectl apply -f resiliency-circuit-breaker/customers.yaml  # v1 healthy + v2 bad
+kubectl apply -f resiliency/resiliency-circuit-breaker/customers.yaml  # v1 healthy + v2 bad
 kubectl apply -f istio-1.29.0/samples/sleep/sleep.yaml
 kubectl rollout status deployment/customers-v1 deployment/customers-v2-bad deployment/sleep --timeout=60s
 
 SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
 for i in $(seq 1 10); do kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://customers.default.svc.cluster.local; done # ~50% 503
 
-kubectl apply -f resiliency-circuit-breaker/customers-circuit-breaker.yaml  # DestinationRule: eject bad pod after 1 consecutive error
+kubectl apply -f resiliency/resiliency-circuit-breaker/customers-circuit-breaker.yaml  # DestinationRule: eject bad pod after 1 consecutive error
 
 for i in $(seq 1 10); do kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://customers.default.svc.cluster.local; done # bad pod ejected after first hit, then all 200
 ```
 
 ```sh
-kubectl delete -f resiliency-circuit-breaker/customers.yaml
+kubectl delete -f resiliency/resiliency-circuit-breaker/customers.yaml
 kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
 kubectl delete dr customers 2>/dev/null; true
 kubectl delete vs customers 2>/dev/null; true
@@ -394,15 +394,15 @@ It's possible to simulate a slow network or abort the Http request. Fault inject
 ![Fault Injection](resources/fault-injection.png)
 
 ```sh
-kubectl apply -f delays-and-failure-injection/gateway.yaml
-kubectl apply -f delays-and-failure-injection/web-frontend.yaml
-kubectl apply -f delays-and-failure-injection/customers.yaml
-kubectl apply -f delays-and-failure-injection/customers-delay.yaml
+kubectl apply -f resiliency/delays-and-failure-injection/gateway.yaml
+kubectl apply -f resiliency/delays-and-failure-injection/web-frontend.yaml
+kubectl apply -f resiliency/delays-and-failure-injection/customers.yaml
+kubectl apply -f resiliency/delays-and-failure-injection/customers-delay.yaml
 
 export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
 curl http://$GATEWAY_IP/ # Some requests take 5s
 
-kubectl apply -f delays-and-failure-injection/customers-fault.yaml
+kubectl apply -f resiliency/delays-and-failure-injection/customers-fault.yaml
 curl http://$GATEWAY_IP/ # Some requests return 500
 ```
 
@@ -428,8 +428,8 @@ SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
 # Works without ServiceEntry (default ALLOW_ANY policy lets all traffic out)
 kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://httpbin.org/get
 
-kubectl apply -f external-service/httpbin-entry.yaml   # register httpbin.org in the mesh
-kubectl apply -f external-service/httpbin-timeout.yaml # 3s timeout on all calls to httpbin.org
+kubectl apply -f resiliency/external-service/httpbin-entry.yaml   # register httpbin.org in the mesh
+kubectl apply -f resiliency/external-service/httpbin-timeout.yaml # 3s timeout on all calls to httpbin.org
 
 # This endpoint delays 10s — Envoy cuts it off after 3s with 504
 kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://httpbin.org/delay/10
@@ -448,7 +448,7 @@ istioctl install --set profile=demo --set meshConfig.outboundTrafficPolicy.mode=
 kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://httpbin.org/get  # 502
 
 # Allow only httpbin.org
-kubectl apply -f external-service/httpbin-entry.yaml
+kubectl apply -f resiliency/external-service/httpbin-entry.yaml
 kubectl exec $SLEEP_POD -c sleep -- curl -s -o /dev/null -w "%{http_code}\n" http://httpbin.org/get  # 200
 ```
 
@@ -505,20 +505,20 @@ For inbound connections outside the mesh there is the `tls` field in the `Gatewa
 For outbound connection *DestinationRule* is applied.
 
 ```sh
-kubectl apply -f mTLS/gateway.yaml
+kubectl apply -f security/mTLS/gateway.yaml
 
 kubectl label namespace default istio-injection- # Disable automatic injection to simulate a service outside the mesh
-kubectl apply -f mTLS/web-frontend.yaml
+kubectl apply -f security/mTLS/web-frontend.yaml
 
 kubectl label namespace default istio-injection=enabled
 kubectl get pods # customers should have two containers while the frontend just one
 export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
 curl http://$GATEWAY_IP/ # it works and won't be encrypted since the frontend send plain text
 
-kubectl apply -f mTLS/vs-customers-gateway.yaml # Expose customer
+kubectl apply -f security/mTLS/vs-customers-gateway.yaml # Expose customer
 curl -H "Host: customers.default.svc.cluster.local" http://$GATEWAY_IP # This will be encrypted because it goes from ingress to customer
 
-kubectl apply -f mTLS/strict-mtls.yaml # From this point on only calls directly to customer will work
+kubectl apply -f security/mTLS/strict-mtls.yaml # From this point on only calls directly to customer will work
 ```
 
 ```sh
@@ -550,7 +550,7 @@ kubectl rollout status deployment/httpbin deployment/curl -n foo --timeout=90s
 kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl http://httpbin.foo:8000/ip -sS -o /dev/null -w "%{http_code}\n"
 # 200
 
-kubectl apply -f authentication/jwt-auth-httpbin.yaml
+kubectl apply -f security/authentication/jwt-auth-httpbin.yaml
 
 # Invalid token → 401 (RequestAuthentication rejects it)
 kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer invalidToken" -w "%{http_code}\n"
@@ -576,10 +576,10 @@ kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata
 # → {"exp":4685989700,"foo":"bar","iat":1532389700,"iss":"testing@secure.istio.io","sub":"testing@secure.istio.io"}
 ```
 
-`authentication/jwt-policy.yaml` — `AuthorizationPolicy` that requires a valid JWT with `requestPrincipal = testing@secure.istio.io/testing@secure.istio.io` (issuer + subject). Without a matching token the request is denied with `403`.
+`security/authentication/jwt-policy.yaml` — `AuthorizationPolicy` that requires a valid JWT with `requestPrincipal = testing@secure.istio.io/testing@secure.istio.io` (issuer + subject). Without a matching token the request is denied with `403`.
 
 ```sh
-kubectl apply -f authentication/jwt-policy.yaml
+kubectl apply -f security/authentication/jwt-policy.yaml
 
 # No token → 403 (AuthorizationPolicy denies — no matching principal)
 kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -w "%{http_code}\n"
@@ -591,10 +591,10 @@ kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata
 # 200 — principal matches
 ```
 
-`authentication/jwt-policy-with-claim.yaml` — updates the `AuthorizationPolicy` (same name `require-jwt`) to also require a `groups: group1` claim. The demo.jwt token no longer satisfies this condition.
+`security/authentication/jwt-policy-with-claim.yaml` – updates the `AuthorizationPolicy` (same name `require-jwt`) to also require a `groups: group1` claim. The demo.jwt token no longer satisfies this condition.
 
 ```sh
-kubectl apply -f authentication/jwt-policy-with-claim.yaml
+kubectl apply -f security/authentication/jwt-policy-with-claim.yaml
 
 # Valid token but no groups claim → 403
 kubectl exec "$(kubectl get pod -l app=curl -n foo -o jsonpath={.items..metadata.name})" -c curl -n foo -- curl "http://httpbin.foo:8000/headers" -sS -o /dev/null -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n"
@@ -623,9 +623,9 @@ Once authenticated a principal can be subjected to authorized only to perform a 
 If there are more policies the get evaluated in the following order: CUSTOM, DENY & ALLOW. A good practice is having a policy to deny all request and create individual allows.
 
 ```sh
-kubectl apply -f authorization/gateway.yaml
-kubectl apply -f authorization/web-frontend.yaml
-kubectl apply -f authorization/customers-v1.yaml
+kubectl apply -f security/authorization/gateway.yaml
+kubectl apply -f security/authorization/web-frontend.yaml
+kubectl apply -f security/authorization/customers-v1.yaml
 kubectl rollout status deployment/web-frontend deployment/customers-v1 --timeout=90s
 
 export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
@@ -633,16 +633,16 @@ export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonp
 
 curl http://$GATEWAY_IP/ # Works
 
-kubectl apply -f authorization/deny-all.yaml
-curl http://$GATEWAY_IP/ # Fail
+kubectl apply -f security/authorization/deny-all.yaml
+curl http://$GATEWAY_IP/ # Fail
 
-kubectl apply -f authorization/allow-ingress-frontend.yaml 
+kubectl apply -f security/authorization/allow-ingress-frontend.yaml
 curl http://$GATEWAY_IP/ # Fail but this time the failure is not coming from the ingress -> frontend connection but frontend -> customer
 
 # This will be denied because it doesn't go through ingress. Deny all is still applied...
 kubectl run curl --image=curlimages/curl --restart=Never --rm -it -- curl http://web-frontend  # RBAC: access denied
 
-kubectl apply -f authorization/allow-web-frontend-customers.yaml
+kubectl apply -f security/authorization/allow-web-frontend-customers.yaml
 curl http://$GATEWAY_IP/ # Works
 ```
 
