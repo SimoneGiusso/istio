@@ -11,9 +11,18 @@ spec:
   rules:
     - from:
         - source:
-            namespaces: ["istio-system"]
+            namespaces: ["istio-system"]  # Allow any pod from the istio-system namespace (broad fallback)
         - source:
             principals:
               [
+                # Istio assigns each pod a SPIFFE identity based on its Kubernetes ServiceAccount:
+                #   spiffe://<trustDomain>/ns/<namespace>/sa/<serviceAccountName>
+                # In AuthorizationPolicy the "principals" field uses the same path without the spiffe:// prefix:
+                #   <trustDomain>/ns/<namespace>/sa/<serviceAccountName>
+                #
+                # "cluster.local" → the cluster trust domain (Istio default)
+                # "ns/istio-system" → the namespace where the ingress gateway pod runs
+                # "sa/istio-ingressgateway-service-account" → the ServiceAccount of the istio-ingressgateway pod
+                #   (kubectl get sa -n istio-system)
                 "cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account",
               ]

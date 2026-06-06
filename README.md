@@ -626,6 +626,7 @@ If there are more policies the get evaluated in the following order: CUSTOM, DEN
 kubectl apply -f authorization/gateway.yaml
 kubectl apply -f authorization/web-frontend.yaml
 kubectl apply -f authorization/customers-v1.yaml
+kubectl rollout status deployment/web-frontend deployment/customers-v1 --timeout=90s
 
 export GATEWAY_IP=$(kubectl get svc -n istio-system istio-ingressgateway -ojsonpath='{.status.loadBalancer.ingress[0].ip}')
 
@@ -638,7 +639,7 @@ curl http://$GATEWAY_IP/ # Fail
 kubectl apply -f authorization/allow-ingress-frontend.yaml 
 curl http://$GATEWAY_IP/ # Fail but this time the failure is not coming from the ingress -> frontend connection but frontend -> customer
 
-# This will be defined because it doesn't go through ingress. Deny all is still applied...
+# This will be denied because it doesn't go through ingress. Deny all is still applied...
 kubectl run curl --image=curlimages/curl --restart=Never --rm -it -- curl http://web-frontend  # RBAC: access denied
 
 kubectl apply -f authorization/allow-web-frontend-customers.yaml

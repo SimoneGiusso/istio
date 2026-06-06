@@ -12,6 +12,13 @@ spec:
   rules:
   - from:
     - source:
-        namespaces: ["default"]
-      source:
-        principals: ["cluster.local/ns/default/sa/web-frontend"]
+        principals:
+          # Istio assigns each pod a SPIFFE identity based on its Kubernetes ServiceAccount:
+          #   spiffe://<trustDomain>/ns/<namespace>/sa/<serviceAccountName>
+          # In AuthorizationPolicy the "principals" field uses the same path without the spiffe:// prefix:
+          #   <trustDomain>/ns/<namespace>/sa/<serviceAccountName>
+          #
+          # "cluster.local" → the cluster trust domain (Istio default)
+          # "ns/default"    → the namespace where web-frontend runs
+          # "sa/web-frontend" → the ServiceAccount set in web-frontend.yaml under spec.template.spec.serviceAccountName
+          - "cluster.local/ns/default/sa/web-frontend"
