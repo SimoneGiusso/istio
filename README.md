@@ -391,7 +391,7 @@ kubectl delete vs customers 2>/dev/null; true
 
 It's possible to simulate a slow network or abort the Http request. Fault injections don't trigger retry policies!
 
-![alt text](fault-injection.png)
+![Fault Injection](resources/fault-injection.png)
 
 ```sh
 kubectl apply -f delays-and-failure-injection/gateway.yaml
@@ -470,7 +470,7 @@ Some definitions:
 
 ### mTLS
 
-![alt text](mTLS.png)
+![mTLS Architecture](resources/mTLS.png)
 
 *PeerAuthentication* (accepted traffic) supports:
 
@@ -700,5 +700,5 @@ kubectl delete sidecar {details,productpage,ratings,reviews-v1,reviews-v2,review
 
 Istio makes its istio-proxy sidecar available as a Debian (.deb) or CentOS (.rpm) package and can simply be installed on a Linux VM and configured as a systemd service.
 
-![image](VM-mesh-extension.png)
+![VM Mesh Extension](resources/VM-mesh-extension.png)
 

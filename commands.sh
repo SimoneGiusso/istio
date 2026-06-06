@@ -1,0 +1,1 @@
+kubectl exec <pod_name> -c istio-proxy -- pilot-agent request POST 'logging?level=debug' # Enable debug logging in the Envoy proxy sidecar container of a pod. 
