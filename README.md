@@ -18,6 +18,7 @@
     - [Header based traffic](#header-based-traffic)
     - [URI Rewrite](#uri-rewrite)
     - [Traffic Mirroring](#traffic-mirroring)
+    - [Header Manipulation](#header-manipulation)
   - [Resiliency & Failure Injection: timeout, retry & circuit breaking](#resiliency--failure-injection-timeout-retry--circuit-breaking)
     - [Timeout](#timeout)
     - [Retries](#retries)
@@ -32,6 +33,7 @@
 - [Advance topics](#advance-topics)
   - [Extend the mesh](#extend-the-mesh)
   - [Improve mesh performances](#improve-mesh-performances)
+  - [Using an External HTTPS Proxy](#using-an-external-https-proxy)
   - [Onboarding VM in istio cluster](#onboarding-vm-in-istio-cluster)
 
 ## Requirements
@@ -391,6 +393,60 @@ kubectl logs $V2_POD -c svc | tail -5
 kubectl delete -f traffic-management/trafficrouting-mirroring/customers.yaml
 kubectl delete -f traffic-management/trafficrouting-mirroring/customers-vs-mirror.yaml
 kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
+```
+
+#### Header Manipulation
+
+Headers can be manipulated at two levels in a VirtualService:
+- **Global level** (`http[].headers`): applied to all destinations in that route rule.
+- **Destination level** (`route[].headers`): applied only when that specific destination is selected.
+
+Three operations are available:
+| Operation | Behaviour |
+|---|---|
+| `set` | Writes the header value; overwrites if the header already exists |
+| `add` | Appends the value to the header; creates a comma-separated list if it already exists |
+| `remove` | Removes the listed headers |
+
+The demo uses `httpbin` (echoes all request headers at `/headers`) and `sleep` as the curl client. The VirtualService:
+1. Sets `x-service-name: httpbin` on every **request** (global `set`).
+2. Sets `x-from-service: httpbin` on every **response** (global `set`).
+3. At the destination level, sets `x-routed-to: httpbin-v1` on the **request**.
+4. At the destination level, **removes** `user-agent` from the **request** before forwarding — httpbin will no longer echo it back.
+5. At the destination level, **adds** `x-from-service: httpbin-destination` to the **response** — because the global level already set the same header, the caller receives two `x-from-service` entries (HTTP multi-value, combined as a comma-separated list by clients).
+
+```sh
+kubectl apply -f istio-1.29.0/samples/httpbin/httpbin.yaml
+kubectl apply -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl rollout status deployment/httpbin deployment/sleep --timeout=60s
+
+SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
+
+# Without the VirtualService: no injected headers, user-agent present
+kubectl exec $SLEEP_POD -c sleep -- curl -s http://httpbin.default.svc.cluster.local:8000/headers
+# "User-Agent": ["curl/..."]   ← present
+# no X-Service-Name, no X-Routed-To
+
+# Apply the VirtualService with header manipulation rules
+kubectl apply -f traffic-management/trafficrouting-headers/httpbin-vs.yaml
+sleep 3  # allow Envoy config to propagate
+
+# Request headers echoed by httpbin — Envoy injects and removes before forwarding
+kubectl exec $SLEEP_POD -c sleep -- curl -s http://httpbin.default.svc.cluster.local:8000/headers
+# "X-Service-Name": ["httpbin"]    ← global set
+# "X-Routed-To":   ["httpbin-v1"] ← destination-level set
+# User-Agent is absent              ← destination-level remove
+
+# Response headers — inspect what the caller receives back
+kubectl exec $SLEEP_POD -c sleep -- curl -sI http://httpbin.default.svc.cluster.local:8000/headers
+# x-from-service: httpbin             ← global set
+# x-from-service: httpbin-destination ← destination add → two values for the same header
+```
+
+```sh
+kubectl delete -f istio-1.29.0/samples/httpbin/httpbin.yaml
+kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl delete -f traffic-management/trafficrouting-headers/httpbin-vs.yaml
 ```
 
 ### Resiliency & Failure Injection: timeout, retry & circuit breaking
@@ -777,6 +833,65 @@ istioctl proxy-config endpoints deploy/ratings-v1.default # now it has not any r
 # Clean up
 kubectl delete -f istio-1.29.0/samples/bookinfo/platform/kube/bookinfo.yaml
 kubectl delete sidecar {details,productpage,ratings,reviews-v1,reviews-v2,reviews-v3}-sidecar
+```
+
+### Using an External HTTPS Proxy
+
+Some environments require all outbound traffic to pass through a corporate HTTPS proxy rather than reaching the internet directly. Applications use the HTTP `CONNECT` method to establish a tunnel through the proxy, after which the proxy forwards the traffic as raw TCP. Because of this, the ServiceEntry for the proxy must be **TCP** (not HTTP) — Istio only sees an opaque byte stream once the tunnel is up.
+
+The demo deploys a Squid proxy in a dedicated `external` namespace **without** Istio sidecar injection (simulating a legacy proxy outside the mesh). A `sleep` pod inside the mesh (with sidecar) then reaches `wikipedia.org` through Squid.
+
+With `outboundTrafficPolicy: ALLOW_ANY` (the default demo profile), the mesh pod can reach the proxy even without a ServiceEntry — but Envoy uses the generic `PassthroughCluster`, meaning Istio has no visibility or policy control over that connection. Once a TCP ServiceEntry is registered, Envoy routes to the named cluster `outbound|3128||my-company-proxy.com`, enabling traffic policies (timeouts, retries, access logs) to be applied to the proxy connection.
+
+> **Why TCP and not HTTP?**  
+> Applications open the tunnel with HTTP `CONNECT`, but once established the proxy forwards raw bytes. Istio only ever sees TCP — it has no visibility into what is tunnelled through.  
+> You must **not** create ServiceEntries for the external destinations (e.g. `wikipedia.org`) — from Istio's perspective all traffic goes to the proxy only.
+
+```sh
+# Deploy the Squid proxy in the external namespace (no sidecar injection)
+kubectl apply -f advanced/external-proxy/squid-proxy.yaml
+kubectl rollout status deployment/squid -n external --timeout=60s
+
+# Deploy sleep with sidecar in the default namespace as the mesh client
+kubectl apply -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl rollout status deployment/sleep --timeout=60s
+
+export SOURCE_POD=$(kubectl get pod -l app=sleep -o jsonpath={.items..metadata.name})
+export PROXY_IP=$(kubectl get pod -n external -l app=squid -o jsonpath={.items..podIP})
+export PROXY_PORT=3128
+
+# Without a ServiceEntry: traffic reaches the proxy (ALLOW_ANY), but Envoy uses
+# PassthroughCluster — no Istio policy or observability applied
+kubectl exec "$SOURCE_POD" -c sleep -- sh -c "HTTPS_PROXY=$PROXY_IP:$PROXY_PORT curl -s https://en.wikipedia.org/wiki/Main_Page" | grep -o "<title>.*</title>"
+# <title>Wikipedia, the free encyclopedia</title>
+kubectl logs "$SOURCE_POD" -c istio-proxy | grep $PROXY_IP | tail -1
+# "PassthroughCluster" ← no registered route for the proxy
+
+# Register the proxy as a TCP ServiceEntry so Istio manages the connection
+# PROXY_IP is substituted at apply-time via envsubst
+envsubst < advanced/external-proxy/proxy-service-entry.yaml | kubectl apply -f -
+sleep 3  # allow Envoy config to propagate
+
+# Same request — still works, but now routed through the named cluster
+kubectl exec "$SOURCE_POD" -c sleep -- sh -c "HTTPS_PROXY=$PROXY_IP:$PROXY_PORT curl -s https://en.wikipedia.org/wiki/Main_Page" | grep -o "<title>.*</title>"
+# <title>Wikipedia, the free encyclopedia</title>
+
+# Envoy now uses the named cluster — Istio policies (timeout, retries, etc.) apply
+kubectl logs "$SOURCE_POD" -c istio-proxy | grep $PROXY_IP | tail -1
+# "outbound|3128||my-company-proxy.com" ← named cluster, policies enforced
+
+# Squid confirms it received both CONNECT tunnels to wikipedia.org
+kubectl exec "$(kubectl get pod -n external -l app=squid -o jsonpath={.items..metadata.name})" \
+  -n external -- tail /var/log/squid/access.log
+# TCP_TUNNEL/200 ... CONNECT en.wikipedia.org:443 ...
+```
+
+```sh
+# Clean up
+kubectl delete serviceentry proxy
+kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl delete -f advanced/external-proxy/squid-proxy.yaml
+kubectl delete namespace external
 ```
 
 ### Onboarding VM in istio cluster

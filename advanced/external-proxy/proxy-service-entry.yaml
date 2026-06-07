@@ -1,0 +1,25 @@
+# TCP ServiceEntry for the external HTTPS proxy (Squid).
+#
+# The ServiceEntry must be TCP — once the HTTP CONNECT tunnel is established,
+# the proxy forwards raw bytes and Istio only sees an opaque TCP stream.
+#
+# The `hosts` value is arbitrary (ignored for resolution: NONE); what matters
+# is the `addresses` field which matches the proxy pod/VM IP at runtime.
+# Export PROXY_IP before applying:
+#   export PROXY_IP=$(kubectl get pod -n external -l app=squid -o jsonpath={.items..podIP})
+#   envsubst < advanced/external-proxy/proxy-service-entry.yaml | kubectl apply -f -
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: proxy
+spec:
+  hosts:
+    - my-company-proxy.com  # hostname is ignored for NONE resolution; the IP below is what matters
+  addresses:
+    - $PROXY_IP/32
+  ports:
+    - number: 3128
+      name: tcp
+      protocol: TCP
+  location: MESH_EXTERNAL
+  resolution: NONE

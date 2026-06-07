@@ -1,0 +1,59 @@
+# Deploys a Squid HTTP/HTTPS forward proxy in a dedicated namespace that has NO
+# Istio sidecar injection. This simulates a legacy corporate proxy running
+# outside the mesh.
+#
+# The namespace intentionally lacks the "istio-injection: enabled" label so that
+# the Squid pod has no Envoy sidecar and Istio does not intercept its traffic.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external
+  # No istio-injection label → sidecar injection disabled → simulates out-of-mesh proxy
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxy-configmap
+  namespace: external
+data:
+  squid.conf: |
+    http_port 3128
+
+    acl SSL_ports port 443
+    acl CONNECT method CONNECT
+
+    http_access deny CONNECT !SSL_ports
+    http_access allow localhost manager
+    http_access deny manager
+    http_access allow all
+
+    coredump_dir /var/spool/squid
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: squid
+  namespace: external
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: squid
+  template:
+    metadata:
+      labels:
+        app: squid
+    spec:
+      volumes:
+        - name: proxy-config
+          configMap:
+            name: proxy-configmap
+      containers:
+        - name: squid
+          image: sameersbn/squid:3.5.27
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /etc/squid
+              readOnly: true

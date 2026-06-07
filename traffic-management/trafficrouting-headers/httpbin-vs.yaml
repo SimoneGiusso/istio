@@ -1,0 +1,36 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: httpbin
+spec:
+  hosts:
+    - httpbin.default.svc.cluster.local
+  http:
+    - headers:
+        # Global request header: set on every request regardless of destination.
+        # Uses "set" → overwrites the header if it already exists.
+        request:
+          set:
+            x-service-name: "httpbin"
+        # Global response header: always returned to the caller.
+        response:
+          set:
+            x-from-service: "httpbin"
+      route:
+        - destination:
+            host: httpbin.default.svc.cluster.local
+            port:
+              number: 8000
+          # Destination-level header manipulation (applied on top of the global headers).
+          headers:
+            # Add a per-destination request header so the app can see which subset served it.
+            # Also remove the user-agent request header before it reaches the app.
+            request:
+              set:
+                x-routed-to: "httpbin-v1"
+              remove:
+                - user-agent
+            response:
+              # "add" appends to the global x-from-service header → produces a comma-separated list.
+              add:
+                x-from-service: "httpbin-destination"
