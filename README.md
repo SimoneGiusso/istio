@@ -17,6 +17,7 @@
     - [Weighted traffic](#weighted-traffic)
     - [Header based traffic](#header-based-traffic)
     - [URI Rewrite](#uri-rewrite)
+    - [Traffic Mirroring](#traffic-mirroring)
   - [Resiliency & Failure Injection: timeout, retry & circuit breaking](#resiliency--failure-injection-timeout-retry--circuit-breaking)
     - [Timeout](#timeout)
     - [Retries](#retries)
@@ -349,6 +350,46 @@ kubectl exec $SLEEP_POD -c sleep -- curl -s http://customers.default.svc.cluster
 ```sh
 kubectl delete -f traffic-management/trafficrouting-rewrite/customers.yaml
 kubectl delete -f traffic-management/trafficrouting-rewrite/customers-vs-rewrite.yaml
+kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
+```
+
+#### Traffic Mirroring
+
+Traffic mirroring duplicates each incoming request and sends a copy to a second destination. The response from the mirror is discarded — callers always receive the primary service's response and are completely unaffected. This makes it safe to test a new service version against live production traffic before promoting it.
+
+The demo routes 100% of traffic to `customers-v1` while simultaneously mirroring 100% of requests to `customers-v2`. Since callers always get v1's response, you verify the mirroring is active by watching the v2 **app container logs** — they show every mirrored request even though no caller ever sent traffic directly to v2.
+
+> **Response content distinguishes the two versions:**
+> - v1 → `[{"name":"..."}]` — names only (what callers always see)
+> - v2 → `[{"city":"...","name":"..."}]` — names + city (receives silent copies; callers never see this)
+
+> **Note on the `-shadow` hostname suffix:** older Istio/Envoy versions appended `-shadow` to the Host header of mirrored requests (e.g. `customers.default.svc.cluster.local-shadow`) so they were distinguishable in the proxy access logs. Istio 1.18+ disables this by default (`disableShadowHostSuffixAppend: true`), so mirroring is best confirmed via the destination app container logs as shown below.
+
+```sh
+kubectl apply -f traffic-management/trafficrouting-mirroring/customers.yaml
+kubectl apply -f istio-1.29.0/samples/sleep/sleep.yaml
+kubectl rollout status deployment/customers-v1 deployment/customers-v2 deployment/sleep --timeout=60s
+
+SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
+V2_POD=$(kubectl get pod -l app=customers,version=v2 -ojsonpath='{.items[0].metadata.name}')
+
+# Apply the VirtualService: all traffic → v1, mirror 100% → v2
+kubectl apply -f traffic-management/trafficrouting-mirroring/customers-vs-mirror.yaml
+sleep 3  # allow Envoy config to propagate
+
+# Send a few requests — callers always get v1 responses (names only)
+for i in $(seq 1 5); do kubectl exec $SLEEP_POD -c sleep -- curl -s http://customers.default.svc.cluster.local/; done
+# [{"name":"..."},...] every time — v1 only
+
+# Confirm v2 received the mirrored copies via its app container logs
+kubectl logs $V2_POD -c svc | tail -5
+# lines like: "127.0.0.6:XXXXX customers.default.svc.cluster.local GET /"
+# v2 app received every request even though no caller targeted it directly
+```
+
+```sh
+kubectl delete -f traffic-management/trafficrouting-mirroring/customers.yaml
+kubectl delete -f traffic-management/trafficrouting-mirroring/customers-vs-mirror.yaml
 kubectl delete -f istio-1.29.0/samples/sleep/sleep.yaml
 ```
 

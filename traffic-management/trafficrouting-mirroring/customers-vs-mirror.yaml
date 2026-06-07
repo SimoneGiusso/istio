@@ -1,0 +1,27 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: customers
+spec:
+  hosts:
+    - customers.default.svc.cluster.local
+  http:
+    - route:
+        # All traffic is served by v1 — callers always receive v1 responses
+        - destination:
+            host: customers.default.svc.cluster.local
+            port:
+              number: 80
+            subset: v1
+      # Mirror 100% of requests to v2 as a fire-and-forget copy.
+      # v2 receives the traffic but its response is discarded — callers are never affected.
+      # Note: Istio 1.18+ disables the "-shadow" host suffix by default
+      # (disableShadowHostSuffixAppend: true in Envoy config). Mirroring can be
+      # confirmed via the v2 app container logs instead.
+      mirror:
+        host: customers.default.svc.cluster.local
+        port:
+          number: 80
+        subset: v2
+      mirrorPercentage:
+        value: 100
