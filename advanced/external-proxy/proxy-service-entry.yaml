@@ -14,7 +14,7 @@ metadata:
   name: proxy
 spec:
   hosts:
-    - my-company-proxy.com  # hostname is ignored for NONE resolution; the IP below is what matters
+    - my-company-proxy.com # hostname is ignored for NONE resolution; the IP below is what matters
   addresses:
     - $PROXY_IP/32
   ports:
