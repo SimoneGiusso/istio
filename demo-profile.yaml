@@ -9,6 +9,10 @@ spec:
     enableTracing: true
     defaultConfig:
       tracing: {} # disable legacy MeshConfig tracing options
+      # Modify statistics produced at mesh level
+      # proxyStatsMatcher:
+        # inclusionRegexps:
+        # - ".*upstream_cx_.*"
     extensionProviders:
       - name: jaeger
         opentelemetry:

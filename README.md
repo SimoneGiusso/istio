@@ -8,7 +8,14 @@
   - [Uninstall istio](#uninstall-istio)
   - [Enable automatic sidecar injection](#enable-automatic-sidecar-injection)
 - [Observability](#observability)
+  - [Metrics](#metrics)
+    - [Envoy-proxy metrics](#envoy-proxy-metrics)
+    - [Service-Level Metrics](#service-level-metrics)
+    - [Istio-Level Metrics](#istio-level-metrics)
+    - [Demo](#demo)
   - [Tracing](#tracing)
+    - [Demo](#demo-1)
+  - [Logs](#logs)
   - [Kiali](#kiali)
 - [Traffic Management](#traffic-management)
   - [Ingress](#ingress)
@@ -106,6 +113,96 @@ It should shows a pod containing 2 containers
 
 ## Observability
 
+### Metrics
+
+#### Envoy-proxy metrics
+
+The proxies emit many statistics as the requests flow through them.
+
+![Envoy statistics](resources/envoy-statistics.png)
+
+ Metrics are collected under a **collection key**. By default istio enables a small number of collection keys ([envoy statistics](https://istio.io/latest/docs/ops/configuration/telemetry/envoy-stats/)). Statistics can be included/excluded from a collection:
+
+```sh
+ istioctl proxy-config bootstrap <pod_name> \              
+  -n istio-system -o json \
+  | jq '.bootstrap.statsConfig.statsMatcher'
+```
+
+Additional statistics can be added: look for the available statistics of each component (e.g. [router statistics](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/router_filter#statistics)). It is possible to configure metrics at mesh ([`IstioOperator`](demo-profile.yaml#L12)) or proxy level:
+
+```yaml
+metadata:
+  annotations:
+    proxy.istio.io/config: |-
+      proxyStatsMatcher:
+        inclusionRegexps:
+        - ".*upstream_cx_.*"
+```
+
+With `istioctl dashboard proxy [pod-name].[pod-namespace]` you can review the statistics.
+
+#### Service-Level Metrics
+
+In addition to Envoy proxy-level statistics there are service-level metrics: latency, traffic, errors, etc.... Metrics with same labels are grouped together. E.g.:
+
+```sh
+istio_requests_total{
+  connection_security_policy="mutual_tls",
+  destination_app="backend",
+  destination_canonical_service="backend",
+  destination_canonical_revision="v1",
+  destination_principal="cluster.local/ns/default/sa/default",
+  destination_service="backend.default.svc.cluster.local",
+  destination_service_name="backend",
+  destination_service_namespace="default",
+  destination_version="v1",
+  destination_workload="backend-v1",
+  destination_workload_namespace="default",
+  reporter="destination",
+  request_protocol="http",
+  response_code="200",
+  response_flags="-",
+  source_app="frontend",
+  source_canonical_service="frontend",
+  source_canonical_revision="v1",
+  source_principal="cluster.local/ns/default/sa/default",
+  source_version="v1",
+  source_workload="frontend-v1",
+  source_workload_namespace="default"
+} 123
+```
+
+They can be customized at mesh, namespace or workload level via the `Telemetry` resource:
+
+```yaml
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: metrics
+  namespace: istio-system # Using istio namespace will apply at mesh level 
+spec:
+  metrics:
+  - providers:
+    - name: prometheus
+    overrides:
+    - match:
+        metric: REQUEST_COUNT
+      tagOverrides: # Modifying labels to istio_requests_total
+        destination_port:
+          value: "string(destination.port)" # Evaluates an expression that reads the destination port
+        request_host:
+          value: "request.host"
+        response_code:
+          operation: REMOVE # default is UPSERT
+```
+
+#### Istio-Level Metrics
+
+istio related metrics (total services, etc...). 
+
+#### Demo
+
 Deploy a sample application and a sleep service:
 
 ```sh
@@ -149,7 +246,37 @@ while true; do kubectl exec $SLEEP_POD -it -- curl productpage:9080/productpage;
 
 ### Tracing
 
-The Envoy sidecars are configured to send their trace information to a distributed tracing collector. Deploy a collector:
+The Envoy sidecars are configured to send their trace information to a distributed tracing collector. Envoy generates a unique ID and add to HTTP header `x-request-id`.
+
+An extension provider as to be configured in ([`IstioOperator`](demo-profile.yaml#L17)). Then, `Telemetry` source can be used to config (add tags to trace span, change sampling %, etc...):
+
+```yaml
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  tracing:
+  - providers:
+    - name: jaeger
+    customTags: # customize tags
+      sometag:
+        literal:
+          value: my-value
+      header_value_tag:
+        header:
+          name: x-user
+          defaultValue: unknown
+      env_value_tag:
+        environment:
+          name: PYTHON_VERSION
+    randomSamplingPercentage: 100 # Sample all
+```
+
+#### Demo
+
+ Deploy a collector:
 
 ```sh
 kubectl apply -f istio-1.26.0/samples/addons/jaeger.yaml
@@ -162,7 +289,7 @@ SLEEP_POD=$(kubectl get pod -l app=sleep -ojsonpath='{.items[0].metadata.name}')
 while true; do kubectl exec $SLEEP_POD -it -- curl productpage:9080/productpage; sleep 1; done
 ```
 
-Enable tracint and open jaeger dashboard:
+Enable tracing and open jaeger dashboard:
 
 ```sh
 kubectl apply -f - <<EOF
@@ -179,6 +306,24 @@ spec:
 EOF
 
 istioctl dashboard jaeger
+```
+
+### Logs
+
+`isto-proxy` logs are written on standard output. To enable and configure them:
+
+```yaml
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  accessLogging:
+    - providers:
+      - name: envoy # envoyFileAccessLog to log into a file
+      filter:
+        expression: "response.code >= 500"
 ```
 
 ### Kiali
