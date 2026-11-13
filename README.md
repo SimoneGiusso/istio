@@ -746,15 +746,32 @@ kubectl delete vs httpbin-external 2>/dev/null; true
 
 ## Security
 
-Some definitions:
-
 **Access Control**: can a *principal* perform an *action* on this *object*?
-**Authentication**: validate that credentials are valid and authentic. I k8s the service account is the identity
+
+**Authentication**: validate that credentials are valid and authentic. In k8s the service account is the identity
+
 **mTLS**: both client and service provide certificates to verify identity.
 
 ### mTLS
 
-![mTLS Architecture](resources/mTLS.png)
+Istio can automate the lifecycle of certificates used for TLS: issuance, renewal, and revocation.
+
+Istio issues identities to workloads in the mesh as X.509 certificates that can use to prove their identities. The envoy proxies extract the SPIEFEE ID from the SAN filed of the certificate which gives the service its identity.
+
+![certificate delivery](resources/certificate-delivery.png)
+*The istio-agent receives the certificate and key pairs from **Citadel** and makes them available via SDS (Secret Discovery Service) to the Envoy proxy*.
+
+### Authentication & Authorization
+
+In istio a Service (Principal) is authorized when has a X.509 certificate assigned. There are 3 resources to control Authentication and Authorization:
+
+- **PeerAuthentication**: configures service-to-service
+- **RequestAuthentication**: configures user authentication and allows proxies to authenticate JWTs.
+- **AuthorizationPolicy**: configures authorization rules and apply them based on the info extracted from the above 2 resources.
+
+![authentication-and-authorization-resources](resources/authentication-and-authorization-resources.png)
+
+#### PeerAuthentication
 
 *PeerAuthentication* (accepted traffic) supports:
 
@@ -764,6 +781,8 @@ Some definitions:
 | DISABLE | mTLS is disabled; connections are plaintext. |
 | PERMISSIVE (default) | The workload accepts both plaintext and mTLS connections. Useful for gradual rollout or mixed clients. |
 | STRICT | Connections must use mTLS; both client and server must present valid certificates. |
+
+The mTLS settings can be configured at mesh, namespace, workload, and port levels. 
 
 *DestinationRule* (send traffic) supports:
 
@@ -775,6 +794,8 @@ Some definitions:
 | ISTIO_MUTUAL (default) | Istio-managed mTLS using automatic Istio-issued certificates (recommended for mesh-wide mTLS). |
 
 Therefore if the destination rule is not specificed, by default all traffic inside the mesh is encrypted.
+
+![mTLS Architecture](resources/mTLS.png)
 
 For inbound connections outside the mesh there is the `tls` field in the `Gateway` resource. Common `tls.mode` values:
 
@@ -814,13 +835,13 @@ kubectl delete vs customers web-frontend
 kubectl delete gateway gateway
 ```
 
-### Authentication & Authorization
+#### RequestAuthentication
 
-The *RequestAuthentication* resource is used for end-user authentication. The authentication is done per request and verifies the credentials attached to the request in JSON Web Tokens (JWTs).
+The *RequestAuthentication* resource validates JWT tokens on incoming requests. It does **not** enforce access by itself — a missing token is still allowed through (validation only applies when a token is present). 
 
-#### Authentication
+By default Istio look at the Authorization header for the token and then validate it against a token issuer, audiences, JWKs URI to validate the signature. Once validated it output the verified token into the header o you can configure to populate specific headers.
 
-The *RequestAuthentication* resource validates JWT tokens on incoming requests. It does **not** enforce access by itself — a missing token is still allowed through (validation only applies when a token is present). Pair it with an *AuthorizationPolicy* to enforce who can access what.
+Pair it with an *AuthorizationPolicy* to enforce who can access what.
 
 ```sh
 # Deploy httpbin and curl WITH Envoy sidecars (2 containers each: app + istio-proxy)
@@ -904,7 +925,7 @@ Once authenticated a principal can be subjected to authorized only to perform a 
 - CUSTOM: let the decision to an exteranl authorization system
 - AUDIT: only log request if the criterias matches
 
-If there are more policies the get evaluated in the following order: CUSTOM, DENY & ALLOW. A good practice is having a policy to deny all request and create individual allows.
+If there are more policies they get evaluated in the following order: CUSTOM, DENY & ALLOW. A good practice is having a policy to deny all request and create individual allows.
 
 ```sh
 kubectl apply -f security/authorization/gateway.yaml
