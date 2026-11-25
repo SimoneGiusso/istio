@@ -35,9 +35,16 @@
 - [Security](#security)
   - [mTLS](#mtls)
   - [Authentication & Authorization](#authentication--authorization)
-    - [Authentication](#authentication)
+    - [PeerAuthentication](#peerauthentication)
+    - [RequestAuthentication](#requestauthentication)
     - [Authorization](#authorization)
 - [Advance topics](#advance-topics)
+  - [Ambient Mode](#ambient-mode)
+    - [Istio CNI and in-pod redirection](#istio-cni-and-in-pod-redirection)
+    - [Ztunnel Proxy](#ztunnel-proxy)
+    - [Waypoint Proxy](#waypoint-proxy)
+    - [Demo](#demo-2)
+  - [Upgrading the Mesh](#upgrading-the-mesh)
   - [Extend the mesh](#extend-the-mesh)
   - [Improve mesh performances](#improve-mesh-performances)
   - [Using an External HTTPS Proxy](#using-an-external-https-proxy)
@@ -71,7 +78,7 @@ Run cloud provider kind for LoadBalancer cloud-like feature `sudo /opt/homebrew/
     ```
 3. Install istio on cluster
 
-     `istioctl install -f demo-profile.yaml` or `istioctl install --set profile=demo`
+     `istioctl install -f demo-profile.yaml --set revision=istio-1-29-0` or `istioctl install --set profile=demo --set revision=istio-1-29-0`
 
  All available profiles: `ls istio-1.29.0/manifests/profiles`:
 
@@ -1079,6 +1086,45 @@ kubectl logs ds/ztunnel -n istio-system
 kubectl delete -f advanced/ambient-mode/allow-nothing.yaml 
 
 kubectl exec deploy/curl -- curl -s -X POST httpbin.default.svc.cluster.local:8000/post # POSTs are allowed
+```
+
+### Upgrading the Mesh
+
+This example upgrades a **demo** ambient mesh directly from 1.29 to 1.32. It skips intermediate versions; for a supported upgrade, follow the [ambient upgrade guide](https://istio.io/latest/docs/ambient/upgrade/helm/) and respect the version compatibility requirements for Istio CNI and ztunnel. Preserve any installation-specific settings when upgrading.
+
+```sh
+curl -L https://istio.io/downloadIstio | ISTIO_VERSION=1.32.0 sh -
+export PATH=$PWD/istio-1.32.0/bin:$PATH # Only valid in this terminal
+istioctl x precheck
+
+# Install the new revision with ambient support and retain the ingress gateway.
+# The profile also updates the shared CNI and ztunnel DaemonSets.
+istioctl install --set profile=ambient --set revision=istio-1-32-0 \
+  --set 'components.ingressGateways[0].name=istio-ingressgateway' \
+  --set 'components.ingressGateways[0].enabled=true'
+```
+
+The old and new control planes run side by side. Installing an ambient profile without the ingress gateway settings can remove a gateway owned by that revision.
+
+```sh
+kubectl get pods -n istio-system -o wide
+istioctl tag set prod-canary --revision istio-1-32-0
+istioctl tag list
+istioctl tag set default --revision istio-1-32-0 --overwrite
+
+# Select the new control plane for the managed waypoint.
+kubectl label gateway waypoint -n default istio.io/rev=istio-1-32-0 --overwrite
+kubectl rollout status deployment/waypoint -n default
+kubectl rollout status daemonset/ztunnel -n istio-system
+kubectl rollout status daemonset/istio-cni-node -n istio-system
+
+# Check both control planes: the old revision should have no connected proxies.
+istioctl proxy-status
+istioctl proxy-status --revision istio-1-29-0
+```
+
+```sh
+istioctl uninstall --revision istio-1-32-0 # 
 ```
 
 ### Extend the mesh
