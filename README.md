@@ -980,6 +980,107 @@ when:
 
 ## Advance topics
 
+### Ambient Mode
+
+A thiner, more performant, less infrastracture-resource way of running mesh than sidecar mode:
+
+![ambient mode](resources/ambient-mode.png)
+*Use a per-node component called ztunnel for mTLS, identity and L4 traffic management, and a waypoint proxy (instance of Envoy proxy) for L7 traffic management.*
+
+#### Istio CNI and in-pod redirection
+
+The Container Network Interface (CNI) is a standard for configuring container networking. Istio CNI runs a node agent as a DaemonSet and configures traffic redirection for pods in the mesh. It works alongside the cluster's primary CNI, which provides pod networking; it does not replace it. Istio CNI is required for ambient mode.
+
+When a pod is added to the ambient mesh, the Istio CNI node agent configures redirection rules inside the pod's Linux network namespace. A network namespace gives a pod its own view of network interfaces, addresses, ports, and routing rules. Istio CNI also notifies the node's ztunnel and gives it access to that namespace, so ztunnel can create listeners there. Traffic entering or leaving the pod can then be transparently redirected to those listeners.
+
+```text
+Pod network namespace                       Node
+┌──────────────────────────────┐
+│ Application                  │
+│      ↕                       │
+│ Redirection rules            │
+│      ↕                       │
+│ Ztunnel listeners for pod    │ ←── managed by node-local ztunnel
+└──────────────────────────────┘
+```
+
+This is called *in-pod redirection* because the rules and listeners are in the pod's network namespace. The ztunnel process itself is shared on the node, not injected as a container into every application pod. 
+
+#### Ztunnel Proxy
+
+It runs as a DaemonSet and route traffic betweent pods in the node where it runs. Ztunnels on each nodes are connected using a secure tunneling protocol named HTTP-Based Overlay Network Environment (HBONE). 
+
+All the configuration are retrieved at start up when connecting to Istio's control plane.
+
+![alt text](resources/ztunnel.png)
+*HBONE created, enables transparent and secure tunneling of TCP packets encapsulated within HTTPS packets.*
+
+#### Waypoint Proxy
+
+Optional if you want HTTP-based policies (routing, matching based on request attributes, fault injection or authorization policies that use HTTP concepts).
+
+They are deployed as Kubernetes Gateway resources of class `istio-waypoint` and can be deployed on any of the nodes in the cluster.
+
+By default it handles traffic for services in its namespace
+
+![alt text](resources/waypointproxy.png)
+*Waypoint proxy enforces L7 policies and send traffic through another HBONE.*
+
+#### Demo
+
+```sh
+istioctl install --set profile=ambient
+
+kubectl get pods -n istio-system # a ztunnel pod for each node should be avaiable
+```
+
+```sh
+kubectl apply -f istio-1.29.0/samples/curl/curl.yaml
+kubectl apply -f istio-1.29.0/samples/httpbin/httpbin.yaml
+
+kubectl label namespace default istio.io/dataplane-mode=ambient # Add workloads to ambient mode
+```
+
+```sh
+kubectl exec deploy/curl -- curl -s httpbin.default.svc.cluster.local:8000/ip
+kubectl logs ds/ztunnel -n istio-system # show connections completed 
+```
+
+```sh
+kubectl apply -f advanced/ambient-mode/allow-nothing.yaml  
+kubectl exec deploy/curl -- curl -s httpbin.default.svc.cluster.local:8000/ip # not it fails
+kubectl logs ds/ztunnel -n istio-system # it will show the error "connection closed due to policy rejection: allow policies exist, but none allowed"
+```
+
+```sh
+kubectl apply -f advanced/ambient-mode/l4-policy.yaml
+kubectl exec deploy/curl -- curl -s httpbin.default.svc.cluster.local:8000/ip # it will be ok now
+```
+
+```sh
+# Waypoint installation
+
+# Deploy CRDs first
+kubectl get crd gateways.gateway.networking.k8s.io &> /dev/null || \
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.3.0/standard-install.yaml
+
+istioctl waypoint apply --namespace default --wait # deploy a waypoint
+kubectl get gtw # can see a waypoint in default namespace
+
+kubectl label service httpbin istio.io/use-waypoint=waypoint # associate service httpbin with waypoint
+
+kubectl apply -f advanced/ambient-mode/l7-policy.yaml 
+```
+
+```sh
+kubectl exec deploy/curl -- curl -s httpbin.default.svc.cluster.local:8000/ip # it fails as only POST are allowed by the policy
+kubectl logs ds/ztunnel -n istio-system
+
+kubectl delete -f advanced/ambient-mode/allow-nothing.yaml 
+
+kubectl exec deploy/curl -- curl -s -X POST httpbin.default.svc.cluster.local:8000/post # POSTs are allowed
+```
+
 ### Extend the mesh
 
 It's possible via the wasm plugin to add custom functionality to envoy proxies, e.g. it's possible to write a script that add headers to each request.
