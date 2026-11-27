@@ -1136,7 +1136,6 @@ It's possible via the wasm plugin to add custom functionality to envoy proxies, 
 By default istio inform each service of each other. If there is a change the work to get the mesh up to date is bigger compare to the case where istio knows which service communicate to which ones. This is worthy for very large clusters though.
 
 ```sh
-
 kubectl apply -f istio-1.29.0/samples/bookinfo/platform/kube/bookinfo.yaml
 istioctl proxy-config endpoints deploy/ratings-v1.default # shows the list of endpoints the sidecar is configured to but this service has not outbound connections
 
@@ -1213,3 +1212,15 @@ Istio makes its istio-proxy sidecar available as a Debian (.deb) or CentOS (.rpm
 
 ![VM Mesh Extension](resources/VM-mesh-extension.png)
 
+### Istio check commands
+
+```sh
+istioctl validate --filename # Validate installation values
+
+istioctl analyze # Can detect configuration issues
+
+istioctl dashboard controlz deployment/istiod.istio-system # Can ispect memory usage, environment variables, etc...
+
+istioctl ps # shows status of config
+istioctl dashboard proxy # access envoy dashboard to check config, change logging levels, etc..
+```
